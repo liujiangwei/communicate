@@ -1,22 +1,22 @@
 package main
 
 import (
-	"encoding/xml"
+	"communicate/wx"
+	"encoding/json"
 	"io/ioutil"
 	"log"
 )
 
-
 func main() {
-	data, err := ioutil.ReadFile("login_page")
+	data,err := ioutil.ReadFile("init_user_data")
 	if err != nil{
 		log.Fatal(err)
 	}
 
-	var ld LoginData
-	if err = xml.Unmarshal(data, &ld); err != nil{
+	var initD wx.InitData
+
+	if err := json.Unmarshal(data, &initD); err != nil{
 		log.Fatal(err)
 	}
-
-	log.Print(ld)
+	log.Print(initD)
 }

@@ -35,6 +35,4 @@ func Login(ctx iris.Context) {
 			"uuid" : client.UUid,
 		},
 	})
-
-	wx.Clients <- client
 }

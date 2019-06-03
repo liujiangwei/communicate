@@ -24,13 +24,11 @@ type WX struct {
 	jar cookiejar.Jar
 }
 
-func New()*WX{
+func New(){
 	wx := &WX{}
 	wx.client = http.Client{}
 	cookieJar, _ := cookiejar.New(nil)
 	wx.client.Jar = cookieJar
-
-	return wx
 }
 
 func main() {

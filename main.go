@@ -7,8 +7,6 @@ import (
 )
 
 func main() {
-
-
 	app := iris.New()
 	app.Get("/", func(context context.Context) {
 		_, _ = context.HTML("test")

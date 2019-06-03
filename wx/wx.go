@@ -1,6 +1,8 @@
 package wx
 
 import (
+	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -9,18 +11,24 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
+	"time"
 )
 
-var Clients chan *Client
+var Clients = make( chan *Client, 100)
 
 var UserAgent = "User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36"
 
+var Host = "https://wx2.qq.com/"
+
 func init() {
+	// 打印用户信息
 	go func() {
-		Clients = make(chan *Client, 100)
 		for {
-			client := <-Clients
-			go client.Login()
+			t := time.NewTimer(1e9)
+			_ = <-t.C
+			for client := range Clients{
+				log.Print(client.User)
+			}
 		}
 	}()
 }
@@ -29,7 +37,8 @@ type Client struct {
 	UUid       string
 	HttpClient http.Client
 	LoginData  *LoginData
-	UserData *UserData
+	Code []byte
+	User       *User
 }
 
 func NewClient() (*Client, error) {
@@ -43,6 +52,25 @@ func NewClient() (*Client, error) {
 		return nil, err
 	} else {
 		wx.UUid = uuid
+	}
+
+	if code ,err := wx.GetCode(); err != nil{
+		return nil, err
+	}else {
+		wx.Code = code
+
+		_ = ioutil.WriteFile("code.png", code, 0666)
+	}
+
+	Clients <- wx
+	if err := wx.CheckLogin("1"); err != nil{
+		log.Fatal(err)
+	}
+
+	if user,err := wx.initUser(); err != nil{
+		log.Fatal(err)
+	}else{
+		wx.User = user
 	}
 
 	return wx, nil
@@ -59,25 +87,13 @@ type LoginData struct {
 	Isgrayscale string   `xml:"isgrayscale"`
 }
 
-type UserData struct {
 
-}
-
-func (client *Client) Login(){
-	if err := client.CheckLogin("0"); err != nil{
-		log.Fatal(err)
-	}
-
-	if data, err := client.init(); err != nil{
-		log.Fatal(err)
-	}else{
-		client.UserData = data
-	}
-}
 
 // 获取二维码
 func (client *Client) GetCode() ([]byte, error) {
 	var u = "https://login.weixin.qq.com/qrcode/" + client.UUid
+	log.Printf("get code [%s]", u)
+
 	resp, err := client.HttpClient.Get(u)
 	if err != nil {
 		return nil, err
@@ -97,9 +113,9 @@ func (client *Client) GetCode() ([]byte, error) {
 
 // 获取二维码需要的uuid
 func (client *Client) getUUid() (string, error) {
-	var u = "https://login.client.qq.com/jslogin?" +
+	var u = "https://login.wx2.qq.com/jslogin?" +
 		"appid=wx782c26e4c19acffb&redirect_uri=https%3A%2F%2Fwx.qq.com%2Fcgi-bin%2Fmmwebwx-bin%2Fwebwxnewloginpage&fun=new&lang=zh_&_="
-	log.Println("get uuid", u)
+	log.Printf("get uuid [%s]", u)
 	resp, err := client.HttpClient.Get(u)
 	if err != nil {
 		return "", err
@@ -122,8 +138,8 @@ func (client *Client) getUUid() (string, error) {
 }
 
 func (client *Client) CheckLogin(tip string) error {
-	var u = "https://login.client.qq.com/cgi-bin/mmwebwx-bin/login?loginicon=true&uuid=" + client.UUid + "&tip=" + tip + "&r=-25471707&_=1559098319558"
-	log.Println("get login status", u)
+	var u = "https://login.wx2.qq.com/cgi-bin/mmwebwx-bin/login?loginicon=true&uuid=" + client.UUid + "&tip=" + tip + "&r=-25471707&_=1559098319558"
+	log.Printf("check login [%s]", u)
 	resp, err := client.HttpClient.Get(u)
 	if err != nil {
 		return err
@@ -174,7 +190,7 @@ func (client *Client) GetLoginData(u string) (*LoginData, error) {
 	//	https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxnewloginpage
 	//	?ticket=A7HyCtAhlvErymvY6y0X97DH@qrticket_0&uuid=odH7dPg35A==&lang=zh_&scan=1559288822&fun=new&version=v2&lang=zh_
 	u += "&fun=new&version=v2&lang=zh_"
-	log.Println("get login ", fmt.Sprintf("[%s]", u))
+	log.Printf("get login data[%s]", u)
 	req, err := http.NewRequest("Get", u, nil)
 	if err != nil {
 		return nil, err
@@ -187,7 +203,7 @@ func (client *Client) GetLoginData(u string) (*LoginData, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(fmt.Sprintf("get login status failed[status=%s]", resp.Status))
+		return nil, errors.New(fmt.Sprintf("get login data failed[status=%s]", resp.Status))
 	}
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -212,6 +228,102 @@ func (client *Client) GetLoginData(u string) (*LoginData, error) {
 	return &ld, nil
 }
 
-func (client *Client) init() (*UserData, error){
-	return &UserData{}, nil
+// 初始化页面
+func (client *Client) initUser() (*User, error){
+	//https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxinit
+	// ?r=-456627536&lang=zh_&pass_ticket=55mKTRXNKqaf21TTVaFoNXNF5qT%252BUTxsnIsXQzxc%252FVTlFe7AA4Sljw8VHWPfEyw6
+
+	var u = fmt.Sprintf("https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxinit?r=-456627536&lang=zh_&pass_ticket=%s", client.LoginData.PassTicket)
+	log.Printf("init user [%s]", u)
+
+	var requestData = map[string]interface{}{
+		"BaseRequest": map[string] string{
+			"Uin"	: client.LoginData.Wxuin,
+			"Sid": client.LoginData.Wxsid,
+			"Skey": client.LoginData.Skey,
+			"DeviceID": "e600602507965867",
+		},
+	}
+	rb,err := json.Marshal(requestData)
+	if err != nil{
+		return nil,err
+	}
+
+	req, err := http.NewRequest("Post", u, bytes.NewBuffer(rb))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("UserAgent", UserAgent)
+	req.Header.Set("Referer", "https://wx2.qq.com/?&lang=zh_")
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+
+	resp, err := client.HttpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(fmt.Sprintf("get login status failed[status=%s]", resp.Status))
+	}
+
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = ioutil.WriteFile("init_user_data", data, 0666)
+
+
+	var initD InitData
+
+	if err := json.Unmarshal(data, &initD); err != nil{
+		return nil, err
+	}
+	if initD.BaseResponse.Ret != 0{
+		log.Print(string(data))
+		return nil,errors.New("init wei xin data failed")
+	}
+
+	var user = initD.User
+
+	return &user, nil
+}
+
+type InitData struct {
+	BaseResponse BaseResponse
+	ChatSet string          `json:"ChatSet"`
+	ClickReportInterval int `json:"ClickReportInterval"`
+	ClientVersion int       `json:"ClientVersion"`
+	ContactList []Member    `json:"ContactList"`
+	Count int               `json:"Count"`
+	GrayScale int           `json:"GrayScale"`
+	InviteStartCount int    `json:"InviteStartCount"`
+	MPSubscribeMsgCount int `json:"MPSubscribeMsgCount"`
+	//MPSubscribeMsgList
+	SKey string `json:"SKey"`
+	SyncKey SyncKey
+	SystemTime int `json:"SystemTime"`
+	User User `json:"User"`
+}
+
+type BaseResponse struct {
+	ErrMsg string `json:"ErrMsg"`
+	Ret int `json:"Ret"`
+}
+
+//{
+//"Count": 4,
+//"List": [{
+//"Key": 1,
+//"Val": 704029466
+//}
+type SyncKey struct {
+	Count int `json:"Count"`
+	List[] SyncKeyInfo
+}
+
+type SyncKeyInfo struct {
+	Key int `json:"Key"`
+	Val int `json:"Val"`
 }
