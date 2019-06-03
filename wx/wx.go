@@ -11,27 +11,12 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
-	"time"
 )
 
 var Clients = make( chan *Client, 100)
 
 var UserAgent = "User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36"
-
 var Host = "https://wx2.qq.com/"
-
-func init() {
-	// 打印用户信息
-	go func() {
-		for {
-			t := time.NewTimer(1e9)
-			_ = <-t.C
-			for client := range Clients{
-				log.Print(client.User)
-			}
-		}
-	}()
-}
 
 type Client struct {
 	UUid       string
